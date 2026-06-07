@@ -1,0 +1,35 @@
+{
+  "name": "milo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Milo — assistant IA personnel proactif sur iMessage",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:web": "tsx watch src/web.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:web": "tsx src/web.ts",
+    "start:worker": "tsx src/worker.ts",
+    "start": "tsx src/start.ts",
+    "typecheck": "tsc --noEmit",
+    "db:setup": "tsx scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "@hono/node-server": "^1.13.0",
+    "bullmq": "^5.34.0",
+    "dotenv": "^16.4.7",
+    "hono": "^4.6.0",
+    "pg": "^8.13.0",
+    "pino": "^9.5.0",
+    "tsx": "^4.19.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.7.0"
+  }
+}
