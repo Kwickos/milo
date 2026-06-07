@@ -6,6 +6,10 @@ import { saveMemory, recallMemory } from '../memory';
 import { createWatch, listWatches, stopWatch } from '../veille';
 import { setProactivity } from '../store';
 import { webSearch as runWebSearch, hasCustomSearch } from '../search';
+import { psMatches, psStandings, hasPandascore } from '../pandascore';
+
+/** Slugs de jeux PandaScore courants, à passer en `game` pour cibler le bon titre. */
+const ESPORT_GAMES = 'lol, csgo (CS2), valorant, dota2, ow, r6siege, rl, codmw, pubg';
 
 /**
  * Construit la liste d'outils pour un utilisateur donné.
@@ -164,5 +168,42 @@ export function buildTools(userId: string) {
           : "Ok, je n'écrirai plus spontanément (tes rappels restent actifs).";
       },
     }),
+
+    // Outils esport (PandaScore) : seulement si une clé est configurée. Données officielles
+    // → Milo ne devine plus un score, une date ou un classement, il les récupère.
+    ...(hasPandascore
+      ? [
+          betaZodTool({
+            name: 'esport_matches',
+            description:
+              "Résultats, scores et prochains matchs d'une équipe esport (LoL, CS2, Valorant, Dota2, etc.), données OFFICIELLES et exactes. Utilise CET outil (jamais web_search ni ta mémoire) dès qu'on parle d'un match, d'un score ou d'une date de match esport.",
+            inputSchema: z.object({
+              team: z.string().describe("Nom de l'équipe, ex. 'Karmine Corp', 'G2', 'T1'"),
+              when: z
+                .enum(['past', 'upcoming', 'running'])
+                .default('past')
+                .describe('past = résultats récents, upcoming = à venir, running = en cours'),
+              game: z
+                .string()
+                .optional()
+                .describe(`Slug du jeu pour lever l'ambiguïté (optionnel) : ${ESPORT_GAMES}`),
+            }),
+            run: async ({ team, when, game }) => psMatches({ team, when, game }),
+          }),
+          betaZodTool({
+            name: 'esport_standings',
+            description:
+              "Classement officiel d'une compétition esport (ex. LEC, LFL, LCK, LCS). Utilise CET outil pour tout classement esport au lieu de deviner.",
+            inputSchema: z.object({
+              league: z.string().describe("Nom de la compétition, ex. 'LEC', 'LFL', 'LCK'"),
+              game: z
+                .string()
+                .optional()
+                .describe(`Slug du jeu pour lever l'ambiguïté (optionnel) : ${ESPORT_GAMES}`),
+            }),
+            run: async ({ league, game }) => psStandings({ league, game }),
+          }),
+        ]
+      : []),
   ];
 }

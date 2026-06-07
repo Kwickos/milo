@@ -23,6 +23,10 @@ const Env = z.object({
   EXA_API_KEY: z.string().optional(),
   PPLX_API_KEY: z.string().optional(),
 
+  // Esport (optionnel) : données officielles matchs/scores/classements (PandaScore).
+  // Sans clé, les outils esport sont simplement absents → Milo retombe sur web_search.
+  PANDASCORE_API_KEY: z.string().optional(),
+
   // Proactivité (garde-fous)
   MILO_PROACTIVE_DAILY_CAP: z.coerce.number().default(5),
   MILO_NUDGE_EVERY_HOURS: z.coerce.number().default(6),

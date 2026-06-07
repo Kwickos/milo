@@ -1,9 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../config';
 import { log } from '../logger';
-import { SYSTEM_PROMPT } from './systemPrompt';
+import { SYSTEM_PROMPT, ESPORT_GUIDANCE } from './systemPrompt';
 import { buildTools } from './tools';
+import { hasPandascore } from '../pandascore';
 import { anthropic as client } from './client';
+
+// Le prompt système reflète les outils réellement disponibles : la note esport n'est
+// ajoutée que si PandaScore est configuré (sinon on évite de citer un outil absent).
+const systemText = hasPandascore ? SYSTEM_PROMPT + ESPORT_GUIDANCE : SYSTEM_PROMPT;
 
 export interface AgentContext {
   displayName?: string | null;
@@ -48,7 +53,7 @@ export async function runAgent(turn: AgentTurn): Promise<string> {
     model: env.MILO_MODEL,
     max_tokens: 2048, // un texto est court ; "thinking" désactivé (coût entrée+sortie + latence en moins)
     system: [
-      { type: 'text' as const, text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' as const } },
+      { type: 'text' as const, text: systemText, cache_control: { type: 'ephemeral' as const } },
     ],
     tools: buildTools(turn.userId),
   };
