@@ -35,11 +35,11 @@ function isQuietHour(tz: string, start: number, end: number): boolean {
 }
 
 async function proactiveCount24h(userId: string): Promise<number> {
-  // Seuls les messages SPONTANÉS sont plafonnés ; les rappels datés (explicitement
-  // demandés par l'utilisateur) ne consomment pas le quota.
+  // Seuls les messages SPONTANÉS sont plafonnés. Exclus du quota : les rappels datés et le brief
+  // quotidien (tous deux explicitement demandés par l'utilisateur).
   const r = await query<{ n: string }>(
     `select count(*)::text as n from proactive_log
-     where user_id = $1 and kind in ('watch', 'nudge')
+     where user_id = $1 and kind in ('watch', 'nudge', 'email', 'automation')
        and created_at > now() - interval '24 hours'`,
     [userId],
   );
@@ -49,23 +49,26 @@ async function proactiveCount24h(userId: string): Promise<number> {
 /** Garde-fous : autorisation, opt-out, quiet hours, plafond/24h. */
 export async function canSendProactive(
   user: ProactiveUser,
+  opts: { ignoreCap?: boolean } = {},
 ): Promise<{ ok: boolean; reason?: string }> {
   if (!user.is_allowed) return { ok: false, reason: 'not_allowed' };
   if (user.profile?.['proactive'] === false) return { ok: false, reason: 'opted_out' };
   if (isQuietHour(user.timezone, user.quiet_hours_start, user.quiet_hours_end))
     return { ok: false, reason: 'quiet_hours' };
-  if ((await proactiveCount24h(user.id)) >= env.MILO_PROACTIVE_DAILY_CAP)
+  if (!opts.ignoreCap && (await proactiveCount24h(user.id)) >= env.MILO_PROACTIVE_DAILY_CAP)
     return { ok: false, reason: 'daily_cap' };
   return { ok: true };
 }
 
+export type ProactiveKind = 'watch' | 'nudge' | 'email' | 'automation' | 'brief';
+
 /** Envoie un message proactif SI les garde-fous l'autorisent. Renvoie true si envoyé. */
 export async function sendProactive(
   user: ProactiveUser,
-  kind: 'watch' | 'nudge',
+  kind: ProactiveKind,
   text: string,
 ): Promise<boolean> {
-  const gate = await canSendProactive(user);
+  const gate = await canSendProactive(user, { ignoreCap: kind === 'brief' });
   if (!gate.ok) {
     log.info({ userId: user.id, kind, reason: gate.reason }, 'message proactif bloqué');
     return false;

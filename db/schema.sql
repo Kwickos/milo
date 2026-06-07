@@ -84,8 +84,75 @@ create table if not exists monitored_topics (
 create table if not exists proactive_log (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references users(id) on delete cascade,
-  kind       text not null,                        -- reminder|watch|nudge
+  kind       text not null,                        -- reminder|watch|nudge|email|automation|brief
   body       text not null,
   created_at timestamptz not null default now()
 );
 create index if not exists proactive_log_user_created_idx on proactive_log(user_id, created_at desc);
+
+-- ─── Intégrations OAuth (Gmail, Agenda Google, …) ───
+-- Tokens chiffrés au repos (voir src/crypto.ts). 1 ligne par (user, provider).
+create table if not exists integrations (
+  user_id       uuid not null references users(id) on delete cascade,
+  provider      text not null,                     -- 'google'
+  access_token  text not null,                     -- chiffré
+  refresh_token text,                              -- chiffré (peut manquer si l'utilisateur n'a pas re-consenti)
+  expires_at    timestamptz,                       -- expiration de l'access_token
+  scopes        text,                              -- scopes accordés (espace-séparés)
+  account_email text,                              -- email du compte connecté (affichage)
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  primary key (user_id, provider)
+);
+
+-- ─── Emails déjà vus (idempotence du triage proactif) ───
+create table if not exists email_seen (
+  user_id    uuid not null references users(id) on delete cascade,
+  provider   text not null default 'google',
+  msg_id     text not null,                        -- id Gmail du message
+  created_at timestamptz not null default now(),
+  primary key (user_id, provider, msg_id)
+);
+
+-- ─── Actions en attente de confirmation (tap-to-approve) ───
+-- Une action irréversible (envoi d'email, création d'event) est mise ici puis exécutée
+-- au « ok » de l'utilisateur, ou expirée/annulée.
+create table if not exists pending_actions (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references users(id) on delete cascade,
+  kind       text not null,                        -- gmail_send|calendar_create_event
+  summary    text not null,                        -- aperçu lisible montré à l'utilisateur
+  payload    jsonb not null,                       -- arguments de l'action
+  status     text not null default 'pending' check (status in ('pending','done','cancelled')),
+  created_at timestamptz not null default now()
+);
+create index if not exists pending_actions_user_idx on pending_actions(user_id, status, created_at desc);
+
+-- ─── Automations (triggers récurrents OU événementiels en langage naturel) ───
+create table if not exists automations (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references users(id) on delete cascade,
+  instruction  text not null,                      -- consigne en langage naturel
+  trigger_type text not null check (trigger_type in ('schedule','email')),
+  schedule_cron text,                              -- cron (trigger_type = schedule)
+  match        text,                               -- filtre Gmail (trigger_type = email), ex. 'from:boss@x.com'
+  job_id       text,                               -- scheduler BullMQ (trigger_type = schedule)
+  status       text not null default 'active' check (status in ('active','paused')),
+  run_count    int not null default 0,             -- nb de déclenchements
+  reply_count  int not null default 0,             -- nb de réponses utilisateur depuis création (anti-dormance)
+  last_run_at  timestamptz,
+  created_at   timestamptz not null default now()
+);
+create index if not exists automations_user_idx on automations(user_id, status);
+
+-- ─── Serveurs MCP par utilisateur (extensibilité : Notion, Linear, GitHub, …) ───
+create table if not exists mcp_servers (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references users(id) on delete cascade,
+  name       text not null,                        -- nom court (slug d'affichage)
+  url        text not null,                        -- endpoint du serveur MCP distant
+  auth_token text,                                 -- jeton d'autorisation (chiffré), optionnel
+  status     text not null default 'active' check (status in ('active','paused')),
+  created_at timestamptz not null default now()
+);
+create index if not exists mcp_servers_user_idx on mcp_servers(user_id, status);

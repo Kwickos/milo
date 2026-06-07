@@ -5,10 +5,16 @@ import {
   type InboundJob,
   type ReminderJob,
   type WatchJob,
+  type AutomationJob,
+  type DailyBriefJob,
 } from './queue';
-import { runAgent } from './agent';
+import { runAgent, runAutonomous } from './agent';
 import { messenger } from './messenger';
-import { getRecentHistory, saveOutboundMessage } from './store';
+import {
+  getRecentHistory,
+  saveOutboundMessage,
+  latestInboundProviderMsgId,
+} from './store';
 import { recallMemory } from './memory';
 import { reconcileReminders } from './reminders';
 import { maybeCompact } from './compaction';
@@ -20,7 +26,11 @@ import {
   getProactiveUser,
   listAllowedProactiveUsers,
 } from './proactive';
-import { env } from './config';
+import { runEmailSweep } from './emailTriage';
+import { composeBrief } from './brief';
+import { getAutomation, markAutomationRun, isDormant, bumpReplyCounts } from './automations';
+import { listPendingActions, executePending, cancelPending } from './pending';
+import { env, hasGoogle } from './config';
 import { query } from './db';
 import { log } from './logger';
 
@@ -83,13 +93,30 @@ async function sendReply(to: string, text: string): Promise<void> {
 
 type InboundData = InboundJob & { computedReply?: string };
 
+/** Tapback/réaction : confirme ou annule une action en attente (sinon ignore). */
+async function handleReaction(userId: string, phone: string, body: string): Promise<void> {
+  const pend = await listPendingActions(userId);
+  if (!pend.length) return; // une réaction sans action en attente n'appelle pas de réponse
+
+  const positive = /(👍|❤️|💯|🔥|✅|👌)/u.test(body) || /\b(liked|loved|emphasized|ok|oui)\b/i.test(body);
+  const negative = /(👎|❌)/u.test(body) || /\b(disliked|questioned|non)\b/i.test(body);
+
+  let res: string | null = null;
+  if (positive && !negative) res = await executePending(userId);
+  else if (negative) res = await cancelPending(userId);
+  if (!res) return;
+
+  await saveOutboundMessage(userId, res);
+  await messenger.send(phone, res);
+}
+
 // ─── Worker entrant : traite les messages des utilisateurs ───
 // concurrency: 1 → sérialise le traitement (≤5 utilisateurs) : pas de course entre
 // messages rapprochés d'une même personne (historique cohérent, réponses ordonnées).
 const inboundWorker = new Worker<InboundData>(
   'inbound',
   async (job) => {
-    const { userId, phone, body, providerMsgId } = job.data;
+    const { userId, phone, body, providerMsgId, kind, attachments } = job.data;
 
     const u = await query<{
       display_name: string | null;
@@ -102,6 +129,25 @@ const inboundWorker = new Worker<InboundData>(
       log.warn({ userId }, 'utilisateur non autorisé, message ignoré');
       return;
     }
+
+    // Réaction/tapback : confirme/annule une action en attente, pas de tour d'agent.
+    if (kind === 'reaction') {
+      await handleReaction(userId, phone, body);
+      return;
+    }
+
+    // Coalescing : si un message plus récent est arrivé depuis, on n'y répond pas — le job du
+    // dernier message répondra avec tout le contexte (les messages rapprochés sont dans l'historique).
+    if (!job.data.computedReply) {
+      const latest = await latestInboundProviderMsgId(userId);
+      if (latest && latest !== providerMsgId) {
+        log.info({ userId }, 'message superseded, on laisse le dernier répondre');
+        return;
+      }
+    }
+
+    // L'utilisateur interagit → réinitialise la dormance des automations.
+    void bumpReplyCounts(userId).catch(() => {});
 
     // Le calcul agent (non idempotent : écrit en mémoire/tâches/rappels) est fait UNE fois.
     // En cas de retry (échec d'envoi), on ne ré-exécute QUE l'envoi.
@@ -123,6 +169,7 @@ const inboundWorker = new Worker<InboundData>(
         },
         history,
         userMessage: body,
+        attachments,
       });
       await saveOutboundMessage(userId, reply); // persiste AVANT l'envoi → historique cohérent
       void maybeCompact(userId).catch(() => {}); // résumé glissant si conversation longue
@@ -232,13 +279,51 @@ async function handleNudgeSweep(): Promise<void> {
   }
 }
 
-// ─── Worker proactif : rappels, veille, nudges ───
-const scheduleWorker = new Worker<ReminderJob | WatchJob | Record<string, never>>(
+async function handleAutomation(automationId: string): Promise<void> {
+  const a = await getAutomation(automationId);
+  if (!a || a.status !== 'active' || a.trigger_type !== 'schedule') return;
+  const user = await getProactiveUser(a.user_id);
+  if (!user) return;
+  const gate = await canSendProactive(user);
+  if (!gate.ok) return;
+
+  const out = await runAutonomous(a.user_id, a.instruction);
+  await markAutomationRun(automationId);
+  if (out && !/^\s*ras\b/i.test(out)) await sendProactive(user, 'automation', out);
+
+  // Anti-dormance : au franchissement du seuil sans aucune réaction, on propose (une fois) de couper.
+  const fresh = await getAutomation(automationId);
+  if (fresh && fresh.run_count === 8 && (await isDormant(fresh))) {
+    await sendProactive(
+      user,
+      'automation',
+      `au fait, cette auto (« ${fresh.instruction.slice(0, 40)}… ») tourne depuis un moment sans réaction de ta part. je la garde ou je coupe ?`,
+    );
+  }
+}
+
+async function handleDailyBrief(userId: string): Promise<void> {
+  const user = await getProactiveUser(userId);
+  if (!user) return;
+  // Le brief est explicitement demandé → il ignore le plafond, mais respecte quiet hours / opt-out.
+  const gate = await canSendProactive(user, { ignoreCap: true });
+  if (!gate.ok) return;
+  const text = await composeBrief(userId);
+  if (text) await sendProactive(user, 'brief', text);
+}
+
+// ─── Worker proactif : rappels, veille, nudges, automations, brief, triage email ───
+const scheduleWorker = new Worker<
+  ReminderJob | WatchJob | AutomationJob | DailyBriefJob | Record<string, never>
+>(
   'schedule',
   async (job) => {
     if (job.name === 'reminder') await handleReminder((job.data as ReminderJob).reminderId);
     else if (job.name === 'watch') await handleWatch((job.data as WatchJob).topicId);
     else if (job.name === 'nudge-sweep') await handleNudgeSweep();
+    else if (job.name === 'automation') await handleAutomation((job.data as AutomationJob).automationId);
+    else if (job.name === 'daily-brief') await handleDailyBrief((job.data as DailyBriefJob).userId);
+    else if (job.name === 'email-sweep') await runEmailSweep();
   },
   { connection },
 );
@@ -256,9 +341,62 @@ scheduleQueue
   )
   .catch((e) => log.error({ err: String(e) }, 'enregistrement nudge-sweep échoué'));
 
+// Tick de triage email récurrent (si Google configuré).
+if (hasGoogle) {
+  scheduleQueue
+    .upsertJobScheduler(
+      'email-sweep',
+      { every: env.MILO_EMAIL_SWEEP_MINUTES * 60 * 1000 },
+      { name: 'email-sweep', data: {}, opts: { attempts: 1 } },
+    )
+    .catch((e) => log.error({ err: String(e) }, 'enregistrement email-sweep échoué'));
+}
+
+/**
+ * Reconciliation des schedulers par-utilisateur (automations récurrentes + briefs) : ré-arme les
+ * jobs dans Redis au démarrage, au cas où Redis aurait été vidé (les définitions vivent en Postgres).
+ */
+async function reconcileSchedulers(): Promise<void> {
+  try {
+    const autos = await query<{ id: string; schedule_cron: string; timezone: string }>(
+      `select a.id, a.schedule_cron, u.timezone
+       from automations a join users u on u.id = a.user_id
+       where a.status = 'active' and a.trigger_type = 'schedule' and a.schedule_cron is not null`,
+    );
+    for (const a of autos.rows) {
+      await scheduleQueue.upsertJobScheduler(
+        `automation:${a.id}`,
+        { pattern: a.schedule_cron, tz: a.timezone },
+        { name: 'automation', data: { automationId: a.id }, opts: { attempts: 1 } },
+      );
+    }
+
+    const briefs = await query<{ user_id: string; timezone: string; hour: number | null }>(
+      `select id as user_id, timezone, (profile->'brief'->>'hour')::int as hour
+       from users where coalesce(profile->'brief'->>'enabled', 'false') = 'true'`,
+    );
+    for (const b of briefs.rows) {
+      const hour = b.hour ?? env.MILO_BRIEF_HOUR;
+      await scheduleQueue.upsertJobScheduler(
+        `brief:${b.user_id}`,
+        { pattern: `0 ${hour} * * *`, tz: b.timezone },
+        { name: 'daily-brief', data: { userId: b.user_id }, opts: { attempts: 1 } },
+      );
+    }
+    log.info({ autos: autos.rowCount, briefs: briefs.rowCount }, 'schedulers reconciliés');
+  } catch (e) {
+    log.error({ err: String(e) }, 'reconcile schedulers échoué');
+  }
+}
+void reconcileSchedulers();
+
 // Réconciliation périodique : ré-arme les rappels orphelins (job perdu après l'insert).
 setInterval(() => {
   reconcileReminders().catch((e) => log.error({ err: String(e) }, 'reconcile rappels échoué'));
 }, 60_000);
+
+// Réconciliation périodique des schedulers (automations/briefs) : rattrape un changement de fuseau
+// ou une perte Redis sans redémarrage. upsertJobScheduler est idempotent → sans effet si rien n'a changé.
+setInterval(() => void reconcileSchedulers(), 6 * 60 * 60 * 1000);
 
 log.info('Milo worker démarré (inbound + schedule + reconcile)');

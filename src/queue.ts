@@ -30,11 +30,15 @@ export const inboundQueue = new Queue('inbound', { connection, defaultJobOptions
 /** Jobs proactifs : rappels datés, veille, nudges (Phase 3). */
 export const scheduleQueue = new Queue('schedule', { connection, defaultJobOptions });
 
+import type { InboundAttachment } from './messenger/types';
+
 export interface InboundJob {
   userId: string;
   phone: string;
   body: string;
   providerMsgId: string;
+  kind?: 'text' | 'reaction';
+  attachments?: InboundAttachment[];
 }
 
 /** Job proactif déclenché à échéance (rappel daté). */
@@ -46,4 +50,14 @@ export interface ReminderJob {
 /** Tick de veille d'un sujet (job récurrent). */
 export interface WatchJob {
   topicId: string;
+}
+
+/** Déclenchement d'une automation récurrente. */
+export interface AutomationJob {
+  automationId: string;
+}
+
+/** Brief quotidien d'un utilisateur. */
+export interface DailyBriefJob {
+  userId: string;
 }

@@ -4,6 +4,13 @@
  * Implémentations : LoopMessage (MVP), plus tard Telegram / BlueBubbles / WhatsApp.
  */
 
+/** Pièce jointe reçue (iMessage : image, note vocale, PDF…). */
+export interface InboundAttachment {
+  type: 'image' | 'audio' | 'video' | 'file';
+  url: string;
+  mimeType?: string;
+}
+
 export interface InboundMessage {
   /** Identifiant du destinataire (téléphone E.164 pour iMessage, chat id pour Telegram…). */
   from: string;
@@ -11,6 +18,10 @@ export interface InboundMessage {
   body: string;
   /** Identifiant fournisseur du message — sert à l'idempotence (dédup des webhooks). */
   providerMsgId: string;
+  /** Nature du message : texte normal ou réaction/tapback (👍/👎…). */
+  kind?: 'text' | 'reaction';
+  /** Pièces jointes (images, audio, PDF…) le cas échéant. */
+  attachments?: InboundAttachment[];
   /** Payload brut, pour debug. */
   raw: unknown;
 }

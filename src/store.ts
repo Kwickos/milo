@@ -52,6 +52,21 @@ export async function setProactivity(userId: string, enabled: boolean): Promise<
   );
 }
 
+/**
+ * Id fournisseur du DERNIER message entrant de l'utilisateur. Sert au coalescing : si le message
+ * en cours de traitement n'est plus le dernier (l'utilisateur a renvoyé depuis), on s'abstient de
+ * répondre — le job du dernier message répondra avec tout le contexte.
+ */
+export async function latestInboundProviderMsgId(userId: string): Promise<string | null> {
+  const r = await query<{ provider_msg_id: string | null }>(
+    `select provider_msg_id from messages
+     where user_id = $1 and direction = 'inbound'
+     order by created_at desc limit 1`,
+    [userId],
+  );
+  return r.rows[0]?.provider_msg_id ?? null;
+}
+
 export interface HistoryItem {
   role: 'user' | 'assistant';
   content: string;

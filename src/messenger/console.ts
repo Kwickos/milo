@@ -1,4 +1,4 @@
-import type { InboundMessage, Messenger } from './types';
+import type { InboundAttachment, InboundMessage, Messenger } from './types';
 import { log } from '../logger';
 
 /**
@@ -25,7 +25,18 @@ export class ConsoleMessenger implements Messenger {
     const text = p['text'] as string | undefined;
     if (!from || !text) return null;
     const id = (p['id'] as string | undefined) ?? `console-${Date.now()}`;
-    return { from: String(from), body: String(text), providerMsgId: String(id), raw: p };
+    // Test multimodal : { "attachments": [{ "type": "image", "url": "..." }] }
+    const attachments = Array.isArray(p['attachments'])
+      ? (p['attachments'] as InboundAttachment[])
+      : undefined;
+    return {
+      from: String(from),
+      body: String(text),
+      providerMsgId: String(id),
+      kind: 'text',
+      ...(attachments?.length ? { attachments } : {}),
+      raw: p,
+    };
   }
 
   async send(to: string, text: string): Promise<void> {
