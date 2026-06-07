@@ -19,7 +19,21 @@ async function cfetch(userId: string, path: string, init?: RequestInit): Promise
     const detail = await res.text().catch(() => '');
     throw new Error(`calendar ${res.status}: ${detail.slice(0, 200)}`);
   }
-  return res.json();
+  // DELETE renvoie 204 sans corps → pas de JSON à parser.
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+/**
+ * Conserve l'heure « mur » locale (YYYY-MM-DDTHH:MM:SS) et retire tout offset/Z. Google applique
+ * ensuite le `timeZone` fourni → on évite de faire faire au modèle une conversion UTC fragile
+ * (source du bug « 17h créé à 15h » : valeur UTC accolée à un offset local).
+ */
+function naiveLocal(iso: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(:\d{2})?/.exec(iso.trim());
+  if (!m) return iso;
+  return m[1]! + (m[2] ?? ':00'); // garantit les secondes (RFC3339 complet exigé par Google)
 }
 
 interface GCalDateTime {
@@ -120,8 +134,8 @@ export async function createEvent(
     summary: input.summary,
     description: input.description,
     location: input.location,
-    start: { dateTime: input.startIso, timeZone: input.timeZone },
-    end: { dateTime: input.endIso, timeZone: input.timeZone },
+    start: { dateTime: naiveLocal(input.startIso), timeZone: input.timeZone },
+    end: { dateTime: naiveLocal(input.endIso), timeZone: input.timeZone },
     ...(input.attendees?.length ? { attendees: input.attendees.map((email) => ({ email })) } : {}),
   };
   const e = (await cfetch(userId, `/calendars/primary/events`, {
@@ -129,4 +143,32 @@ export async function createEvent(
     body: JSON.stringify(body),
   })) as GCalEvent;
   return toEvent(e);
+}
+
+export interface UpdateEventInput {
+  eventId: string;
+  summary?: string;
+  startIso?: string;
+  endIso?: string;
+  timeZone: string;
+}
+
+/** Modifie/déplace un événement (PATCH partiel). Renvoie l'événement à jour. */
+export async function updateEvent(userId: string, input: UpdateEventInput): Promise<CalendarEvent> {
+  const body: Record<string, unknown> = {};
+  if (input.summary) body.summary = input.summary;
+  if (input.startIso) body.start = { dateTime: naiveLocal(input.startIso), timeZone: input.timeZone };
+  if (input.endIso) body.end = { dateTime: naiveLocal(input.endIso), timeZone: input.timeZone };
+  const e = (await cfetch(userId, `/calendars/primary/events/${encodeURIComponent(input.eventId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })) as GCalEvent;
+  return toEvent(e);
+}
+
+/** Supprime un événement. */
+export async function deleteEvent(userId: string, eventId: string): Promise<void> {
+  await cfetch(userId, `/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+  });
 }

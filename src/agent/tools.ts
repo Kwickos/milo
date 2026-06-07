@@ -16,7 +16,14 @@ import {
   GoogleAuthError,
   type EmailSummary,
 } from '../google/gmail';
-import { listEvents, checkBusy, type CalendarEvent } from '../google/calendar';
+import {
+  listEvents,
+  checkBusy,
+  createEvent,
+  updateEvent,
+  deleteEvent,
+  type CalendarEvent,
+} from '../google/calendar';
 import { createPendingAction, executePending, cancelPending } from '../pending';
 import { createAutomation, listAutomations, stopAutomation } from '../automations';
 import { setDailyBrief } from '../brief';
@@ -51,10 +58,21 @@ async function googleGuarded(userId: string, fn: () => Promise<string>): Promise
 
 const shortId = (id: string): string => id.slice(0, 8);
 
+/** Affiche une date ISO dans le fuseau de l'utilisateur (façon "07/06/2026 17:00"). */
+const fmtWhen = (iso: string, tz: string): string => {
+  try {
+    return new Date(iso).toLocaleString('fr-FR', { timeZone: tz, dateStyle: 'short', timeStyle: 'short' });
+  } catch {
+    return iso;
+  }
+};
+
+// NB : pour Gmail/Agenda on affiche l'id COMPLET (id opaque Google, pas un UUID de Milo) — le modèle
+// doit pouvoir le repasser tel quel à gmail_read / calendar_update_event / calendar_delete_event.
 function formatEmailList(emails: EmailSummary[]): string {
   if (!emails.length) return 'Aucun email.';
   return emails
-    .map((e) => `[${shortId(e.id)}] ${e.unread ? '• ' : ''}${e.from} — ${e.subject}`)
+    .map((e) => `[${e.id}] ${e.unread ? '• ' : ''}${e.from} — ${e.subject}`)
     .join('\n');
 }
 
@@ -65,7 +83,7 @@ function formatEvents(events: CalendarEvent[]): string {
       const when = e.allDay
         ? `${e.start} (journée)`
         : new Date(e.start).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
-      return `[${shortId(e.id)}] ${when} — ${e.summary}${e.location ? ` @ ${e.location}` : ''}`;
+      return `[${e.id}] ${when} — ${e.summary}${e.location ? ` @ ${e.location}` : ''}`;
     })
     .join('\n');
 }
@@ -350,29 +368,64 @@ export function buildTools(userId: string, opts: BuildToolsOpts = {}) {
         betaZodTool({
           name: 'calendar_create_event',
           description:
-            "Prépare la création d'un événement. NE le crée PAS tout de suite : crée une action en attente, montre le récap et demande confirmation (confirm_action au « ok »). start_at/end_at en ISO 8601.",
+            "Crée directement un événement dans l'agenda (réversible : tu peux le déplacer/supprimer après). IMPORTANT pour les heures : start_at/end_at = l'heure LOCALE telle que l'utilisateur la dit, au format 2026-06-07T17:00:00, SANS conversion UTC ni offset (le fuseau est géré à part via timezone).",
           inputSchema: z.object({
             summary: z.string().describe("Titre de l'événement"),
-            start_at: z.string().describe('Début (ISO 8601 avec fuseau)'),
-            end_at: z.string().describe('Fin (ISO 8601 avec fuseau)'),
+            start_at: z.string().describe('Début, heure locale sans offset, ex. 2026-06-07T17:00:00'),
+            end_at: z.string().describe('Fin, heure locale sans offset, ex. 2026-06-07T18:00:00'),
             timezone: z.string().default('Europe/Paris').describe('Fuseau IANA, ex. Europe/Paris'),
             description: z.string().optional(),
             location: z.string().optional(),
-            attendees: z.array(z.string()).optional().describe('Emails des invités'),
+            attendees: z.array(z.string()).optional().describe('Emails des invités (les invite par email)'),
           }),
-          run: async ({ summary, start_at, end_at, timezone, description, location, attendees }) => {
-            const when = new Date(start_at).toLocaleString('fr-FR', {
-              dateStyle: 'short',
-              timeStyle: 'short',
-            });
-            await createPendingAction(
-              userId,
-              'calendar_create_event',
-              `Événement « ${summary} » le ${when}`,
-              { summary, startIso: start_at, endIso: end_at, timeZone: timezone, description, location, attendees },
-            );
-            return `Événement prêt (« ${summary} » le ${when}). Montre le récap et demande confirmation. Au « ok », appelle confirm_action.`;
-          },
+          run: async ({ summary, start_at, end_at, timezone, description, location, attendees }) =>
+            googleGuarded(userId, async () => {
+              const e = await createEvent(userId, {
+                summary,
+                startIso: start_at,
+                endIso: end_at,
+                timeZone: timezone,
+                description,
+                location,
+                attendees,
+              });
+              return `Créé : « ${e.summary} », ${fmtWhen(e.start, timezone)} [${e.id}]`;
+            }),
+        }),
+        betaZodTool({
+          name: 'calendar_update_event',
+          description:
+            "Modifie/déplace un événement existant via son id (vu dans calendar_list_events). Ne renseigne QUE les champs à changer. Mêmes règles d'heure que create (locale, sans offset).",
+          inputSchema: z.object({
+            event_id: z.string().describe("L'id de l'événement (complet, vu dans calendar_list_events)"),
+            summary: z.string().optional(),
+            start_at: z.string().optional().describe('Nouveau début, heure locale sans offset'),
+            end_at: z.string().optional().describe('Nouvelle fin, heure locale sans offset'),
+            timezone: z.string().default('Europe/Paris'),
+          }),
+          run: async ({ event_id, summary, start_at, end_at, timezone }) =>
+            googleGuarded(userId, async () => {
+              const e = await updateEvent(userId, {
+                eventId: event_id,
+                summary,
+                startIso: start_at,
+                endIso: end_at,
+                timeZone: timezone,
+              });
+              return `Mis à jour : « ${e.summary} », ${fmtWhen(e.start, timezone)}`;
+            }),
+        }),
+        betaZodTool({
+          name: 'calendar_delete_event',
+          description: "Supprime un événement de l'agenda via son id (vu dans calendar_list_events).",
+          inputSchema: z.object({
+            event_id: z.string().describe("L'id de l'événement à supprimer"),
+          }),
+          run: async ({ event_id }) =>
+            googleGuarded(userId, async () => {
+              await deleteEvent(userId, event_id);
+              return 'Événement supprimé.';
+            }),
         }),
       );
     }

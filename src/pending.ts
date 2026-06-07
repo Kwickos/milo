@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { query } from './db';
 import { normalizeIdPrefix } from './ids';
 import { gmailSend } from './google/gmail';
-import { createEvent } from './google/calendar';
 
 // Validation runtime du payload jsonb (relu depuis la base) avant toute exécution :
 // un payload corrompu/muté échoue proprement au lieu d'atteindre l'API avec une erreur opaque.
@@ -13,15 +12,6 @@ const SendEmailSchema = z.object({
   threadId: z.string().optional(),
   inReplyTo: z.string().optional(),
 });
-const CreateEventSchema = z.object({
-  summary: z.string(),
-  startIso: z.string(),
-  endIso: z.string(),
-  timeZone: z.string(),
-  description: z.string().optional(),
-  location: z.string().optional(),
-  attendees: z.array(z.string()).optional(),
-});
 
 /**
  * Actions irréversibles en attente de confirmation (« tap-to-approve »).
@@ -29,7 +19,7 @@ const CreateEventSchema = z.object({
  * l'action ici et Milo montre l'aperçu. Au « ok » de l'utilisateur, confirm_action l'exécute.
  */
 
-export type PendingKind = 'gmail_send' | 'calendar_create_event';
+export type PendingKind = 'gmail_send';
 
 export async function createPendingAction(
   userId: string,
@@ -99,8 +89,6 @@ export async function executePending(userId: string, idPrefix?: string): Promise
   try {
     if (action.kind === 'gmail_send') {
       await gmailSend(userId, SendEmailSchema.parse(action.payload));
-    } else if (action.kind === 'calendar_create_event') {
-      await createEvent(userId, CreateEventSchema.parse(action.payload));
     }
   } catch (e) {
     if (e instanceof z.ZodError) {
@@ -111,7 +99,7 @@ export async function executePending(userId: string, idPrefix?: string): Promise
   }
 
   await query(`update pending_actions set status = 'done' where id = $1`, [action.id]);
-  return action.kind === 'gmail_send' ? 'Email envoyé ✅' : 'Événement créé ✅';
+  return 'Email envoyé ✅';
 }
 
 /** Annule l'action en attente (la plus récente, ou par préfixe). */
