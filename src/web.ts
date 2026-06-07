@@ -1,11 +1,22 @@
+import { readFileSync } from 'node:fs';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { env, isAllowed, hasGoogle } from './config';
+import { env, isAllowed, hasGoogle, publicUrl } from './config';
 import { log } from './logger';
 import { messenger } from './messenger';
 import { inboundQueue } from './queue';
 import { getOrCreateUser, saveInboundMessageOnce } from './store';
 import { exchangeCodeAndStore, userIdFromState, buildAuthUrl } from './google/oauth';
+
+// Vignette de connexion (1200×630), pré-rendue et committée → servie en statique (pas de génération
+// au runtime, donc aucune dépendance police côté serveur). Sert d'og:image ET de pièce jointe iMessage.
+const OG_CONNECT_PNG = (() => {
+  try {
+    return readFileSync(new URL('../public/og-connect.png', import.meta.url));
+  } catch {
+    return null;
+  }
+})();
 
 const app = new Hono();
 
@@ -49,6 +60,14 @@ app.post('/webhook', async (c) => {
   );
 
   return c.text('ok', 200);
+});
+
+// Vignette de connexion (og:image + pièce jointe iMessage). Servie même sans Google config (inoffensif).
+app.get('/og/connect.png', (c) => {
+  if (!OG_CONNECT_PNG) return c.text('not found', 404);
+  c.header('Content-Type', 'image/png');
+  c.header('Cache-Control', 'public, max-age=86400');
+  return c.body(OG_CONNECT_PNG);
 });
 
 // ─── OAuth Google (Gmail + Agenda) : uniquement si configuré ───
@@ -107,8 +126,13 @@ function connectPage(authUrl: string, selfUrl: string): string {
 <meta property="og:site_name" content="Milo">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${escapeHtml(selfUrl)}">
-<meta name="twitter:card" content="summary">
-<meta name="theme-color" content="#0b0b0c">
+<meta property="og:image" content="${publicUrl}/og/connect.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${publicUrl}/og/connect.png">
+<meta name="theme-color" content="#5b4bff">
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#0b0b0c;color:#eaeaea;display:grid;place-items:center;height:100vh;margin:0}.card{max-width:420px;padding:32px;text-align:center;line-height:1.5}h1{font-size:22px;margin:0 0 8px}p{color:#b3b3b3;margin:0 0 24px}.btn{display:inline-block;background:#fff;color:#111;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:12px}</style>
 <script>window.location.replace(${JSON.stringify(authUrl)})</script>
 </head><body><div class="card"><h1>Connecter à Milo</h1><p>Gmail + Agenda via Google</p><a class="btn" href="${escapeHtml(authUrl)}">Continuer avec Google →</a></div></body></html>`;

@@ -36,8 +36,12 @@ export interface Messenger {
   /** Parse le payload brut en message normalisé (null si ce n'est pas un message texte exploitable). */
   parseInbound(rawBody: string): InboundMessage | null;
 
-  /** Envoie un message texte à un destinataire. */
-  send(to: string, text: string): Promise<void>;
+  /**
+   * Envoie un message à un destinataire.
+   * @param opts.attachments URLs d'images HTTPS à joindre (vignette/aperçu) — LoopMessage les rend
+   *   en pièce jointe iMessage (seul moyen fiable d'afficher une carte/visuel côté destinataire).
+   */
+  send(to: string, text: string, opts?: { attachments?: string[] }): Promise<void>;
 
   /** Indicateur de frappe (optionnel selon le canal). */
   typing?(to: string): Promise<void>;

@@ -39,9 +39,10 @@ export class ConsoleMessenger implements Messenger {
     };
   }
 
-  async send(to: string, text: string): Promise<void> {
+  async send(to: string, text: string, opts?: { attachments?: string[] }): Promise<void> {
     log.info({ to, channel: 'console' }, 'réponse (console)');
+    const att = opts?.attachments?.length ? `\n[pièces jointes: ${opts.attachments.join(', ')}]` : '';
     // eslint-disable-next-line no-console
-    console.log(`\n📲  Milo → ${to}\n${text}\n`);
+    console.log(`\n📲  Milo → ${to}\n${text}${att}\n`);
   }
 }

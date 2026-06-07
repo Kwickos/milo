@@ -126,10 +126,12 @@ export class LoopMessageMessenger implements Messenger {
     };
   }
 
-  async send(to: string, text: string): Promise<void> {
+  async send(to: string, text: string, opts?: { attachments?: string[] }): Promise<void> {
     if (!env.LOOPMESSAGE_AUTH_KEY) {
       throw new Error('LoopMessage non configuré (LOOPMESSAGE_AUTH_KEY manquant)');
     }
+    // attachments : URLs d'images HTTPS (≤ 5, ≤ 256 car.) → rendues en pièce jointe iMessage.
+    const attachments = opts?.attachments?.filter((u) => u.startsWith('https://')).slice(0, 5);
     const res = await fetch(SEND_URL, {
       method: 'POST',
       headers: {
@@ -140,6 +142,7 @@ export class LoopMessageMessenger implements Messenger {
         contact: to,
         text,
         ...(env.LOOPMESSAGE_SENDER_NAME ? { sender: env.LOOPMESSAGE_SENDER_NAME } : {}),
+        ...(attachments?.length ? { attachments } : {}),
       }),
     });
     if (!res.ok) {

@@ -30,7 +30,7 @@ import { runEmailSweep } from './emailTriage';
 import { composeBrief } from './brief';
 import { getAutomation, markAutomationRun, isDormant, bumpReplyCounts } from './automations';
 import { listPendingActions, executePending, cancelPending } from './pending';
-import { env, hasGoogle } from './config';
+import { env, hasGoogle, publicUrl } from './config';
 import { query } from './db';
 import { log } from './logger';
 
@@ -79,15 +79,26 @@ function toBubbles(text: string): string[] {
   return bubbles;
 }
 
-async function sendReply(to: string, text: string): Promise<void> {
+async function sendReply(
+  to: string,
+  text: string,
+  opts?: { attachments?: string[] },
+): Promise<void> {
   const bubbles = toBubbles(text);
   if (bubbles.length === 0) {
-    await messenger.send(to, text.trim() || '…');
+    await messenger.send(to, text.trim() || '…', opts);
     return;
+  }
+  // Vignette : on la joint à la bulle qui porte le lien (sinon à la dernière) → 1 seule pièce jointe.
+  const attach = opts?.attachments;
+  let attachIdx = -1;
+  if (attach?.length) {
+    attachIdx = bubbles.findIndex((b) => /\/connect\/google/.test(b));
+    if (attachIdx < 0) attachIdx = bubbles.length - 1;
   }
   for (let i = 0; i < bubbles.length; i++) {
     if (i > 0) await sleep(Math.min(2000, 400 + bubbles[i]!.length * 25));
-    await messenger.send(to, bubbles[i]!);
+    await messenger.send(to, bubbles[i]!, i === attachIdx ? { attachments: attach } : undefined);
   }
 }
 
@@ -176,7 +187,11 @@ const inboundWorker = new Worker<InboundData>(
       await job.updateData({ ...job.data, computedReply: reply });
     }
 
-    await sendReply(phone, reply); // découpe en plusieurs bulles si besoin
+    // Si la réponse contient le lien de connexion Google, on joint la vignette (carte propre côté iMessage).
+    const replyAttachments = reply.includes('/connect/google')
+      ? [`${publicUrl}/og/connect.png`]
+      : undefined;
+    await sendReply(phone, reply, replyAttachments ? { attachments: replyAttachments } : undefined);
     log.info({ userId }, 'réponse envoyée');
   },
   { connection, concurrency: 1 },
