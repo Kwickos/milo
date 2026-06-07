@@ -31,7 +31,16 @@ const USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
 export const redirectUri = `${publicUrl}/oauth/google/callback`;
 
-/** URL d'autorisation à envoyer à l'utilisateur. Le state encode (et signe) son userId + un nonce. */
+/**
+ * Lien COURT à envoyer à l'utilisateur (sur le domaine de Milo), au lieu de l'énorme URL Google brute.
+ * Il pointe sur /connect/google qui affiche une carte propre (Open Graph) puis redirige vers Google.
+ */
+export function buildConnectLink(userId: string): string {
+  const token = sign(`${userId}:${Date.now().toString(36)}`);
+  return `${publicUrl}/connect/google?t=${encodeURIComponent(token)}`;
+}
+
+/** URL d'autorisation Google complète (construite côté serveur, jamais envoyée telle quelle en texto). */
 export function buildAuthUrl(userId: string): string {
   // nonce pour que deux liens diffèrent ; le payload reste signé donc non falsifiable.
   const state = sign(`${userId}:${Date.now().toString(36)}`);
@@ -48,7 +57,7 @@ export function buildAuthUrl(userId: string): string {
   return `${AUTH_ENDPOINT}?${params.toString()}`;
 }
 
-const STATE_TTL_MS = 10 * 60 * 1000; // un lien d'autorisation est valable 10 min
+const STATE_TTL_MS = 60 * 60 * 1000; // un lien de connexion / state OAuth est valable 1 h
 
 /** Vérifie le state (signature + fraîcheur) et en extrait le userId. null si invalide/expiré/falsifié. */
 export function userIdFromState(state: string): string | null {

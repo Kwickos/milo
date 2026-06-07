@@ -5,7 +5,7 @@ import { log } from './logger';
 import { messenger } from './messenger';
 import { inboundQueue } from './queue';
 import { getOrCreateUser, saveInboundMessageOnce } from './store';
-import { exchangeCodeAndStore, userIdFromState } from './google/oauth';
+import { exchangeCodeAndStore, userIdFromState, buildAuthUrl } from './google/oauth';
 
 const app = new Hono();
 
@@ -53,6 +53,17 @@ app.post('/webhook', async (c) => {
 
 // ─── OAuth Google (Gmail + Agenda) : uniquement si configuré ───
 if (hasGoogle) {
+  // Lien COURT envoyé en texto : iMessage l'affiche en carte (Open Graph) au lieu de l'énorme URL Google.
+  // La page redirige ensuite l'utilisateur vers le consentement Google.
+  app.get('/connect/google', (c) => {
+    const token = c.req.query('t');
+    const userId = token ? userIdFromState(token) : null;
+    if (!userId) {
+      return c.html(page('Lien expiré', 'Ce lien a expiré (1 h). Redemande-en un à Milo.'), 400);
+    }
+    return c.html(connectPage(buildAuthUrl(userId), c.req.url));
+  });
+
   app.get('/oauth/google/callback', async (c) => {
     const code = c.req.query('code');
     const state = c.req.query('state');
@@ -79,6 +90,28 @@ function escapeHtml(s: string): string {
 
 function page(title: string, body: string): string {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Milo</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#0b0b0c;color:#eaeaea;display:grid;place-items:center;height:100vh;margin:0}.card{max-width:420px;padding:32px;text-align:center;line-height:1.5}h1{font-size:22px;margin:0 0 12px}p{color:#b3b3b3;margin:0}</style></head><body><div class="card"><h1>${title}</h1><p>${body}</p></div></body></html>`;
+}
+
+/**
+ * Page de connexion : balises Open Graph (→ jolie carte iMessage à la place de l'URL Google brute)
+ * + redirection vers Google. Le crawler d'aperçu lit l'OG sans exécuter le JS → la carte s'affiche ;
+ * le navigateur de l'utilisateur, lui, redirige aussitôt (ou via le bouton).
+ */
+function connectPage(authUrl: string, selfUrl: string): string {
+  const OG_TITLE = 'Connecter Gmail + Agenda à Milo';
+  const OG_DESC = 'Autorise Milo à gérer tes mails et ton agenda. Tape pour continuer avec Google.';
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${OG_TITLE}</title>
+<meta property="og:title" content="${escapeHtml(OG_TITLE)}">
+<meta property="og:description" content="${escapeHtml(OG_DESC)}">
+<meta property="og:site_name" content="Milo">
+<meta property="og:type" content="website">
+<meta property="og:url" content="${escapeHtml(selfUrl)}">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#0b0b0c">
+<style>body{font-family:-apple-system,system-ui,sans-serif;background:#0b0b0c;color:#eaeaea;display:grid;place-items:center;height:100vh;margin:0}.card{max-width:420px;padding:32px;text-align:center;line-height:1.5}h1{font-size:22px;margin:0 0 8px}p{color:#b3b3b3;margin:0 0 24px}.btn{display:inline-block;background:#fff;color:#111;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:12px}</style>
+<script>window.location.replace(${JSON.stringify(authUrl)})</script>
+</head><body><div class="card"><h1>Connecter à Milo</h1><p>Gmail + Agenda via Google</p><a class="btn" href="${escapeHtml(authUrl)}">Continuer avec Google →</a></div></body></html>`;
 }
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {

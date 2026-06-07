@@ -8,7 +8,7 @@ import { setProactivity } from '../store';
 import { webSearch as runWebSearch, hasCustomSearch } from '../search';
 import { psMatches, psStandings, hasPandascore } from '../pandascore';
 import { hasGoogle } from '../config';
-import { buildAuthUrl } from '../google/oauth';
+import { buildConnectLink } from '../google/oauth';
 import {
   gmailSearch,
   gmailRead,
@@ -44,8 +44,10 @@ export interface BuildToolsOpts {
 }
 
 // ─── Helpers Google ───
+// On renvoie un lien COURT (domaine Milo) qui s'affiche en carte iMessage. Consigne au modèle :
+// l'envoyer SEUL sur sa ligne, sans le réécrire ni le tronquer, pour que l'aperçu se génère.
 const connectHint = (userId: string): string =>
-  `Pas encore connecté à Google. Envoie-lui ce lien pour autoriser Gmail + Agenda (une fois suffit) : ${buildAuthUrl(userId)}`;
+  `Pas encore connecté à Google. Donne-lui ce lien pour brancher Gmail + Agenda (une fois suffit). Mets-le SEUL sur sa propre ligne, tel quel :\n${buildConnectLink(userId)}`;
 
 async function googleGuarded(userId: string, fn: () => Promise<string>): Promise<string> {
   try {
