@@ -44,7 +44,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * par une virgule/ponctuation) à la bulle précédente. Max 4 bulles.
  */
 function toBubbles(text: string): string[] {
-  const cleaned = text.replace(/\*\*/g, '').replace(/`/g, '');
+  const cleaned = text
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .replace(/\s+[—–]\s+/g, '\n'); // un "—" entre 2 idées → nouvelle bulle (et plus de tiret long)
   const bubbles: string[] = [];
   for (let line of cleaned.split('\n')) {
     line = line.trim();
