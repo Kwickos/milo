@@ -61,7 +61,7 @@ if (hasGoogle) {
     if (!userId) {
       return c.html(page('Lien expiré', 'Ce lien a expiré (1 h). Redemande-en un à Milo.'), 400);
     }
-    return c.html(connectPage(buildAuthUrl(userId), c.req.url));
+    return c.html(connectPage(buildAuthUrl(userId)));
   });
 
   app.get('/oauth/google/callback', async (c) => {
@@ -93,22 +93,13 @@ function page(title: string, body: string): string {
 }
 
 /**
- * Page de connexion : balises Open Graph (→ jolie carte iMessage à la place de l'URL Google brute)
- * + redirection vers Google. Le crawler d'aperçu lit l'OG sans exécuter le JS → la carte s'affiche ;
- * le navigateur de l'utilisateur, lui, redirige aussitôt (ou via le bouton).
+ * Page de connexion : simple redirection vers le consentement Google (le lien court évite d'envoyer
+ * l'énorme URL Google brute en texto). Pas de balises de carte : LoopMessage ne peut pas déclencher
+ * d'aperçu riche, donc le lien s'affiche en lien court cliquable, point.
  */
-function connectPage(authUrl: string, selfUrl: string): string {
-  const OG_TITLE = 'Connecter Gmail + Agenda à Milo';
-  const OG_DESC = 'Autorise Milo à gérer tes mails et ton agenda. Tape pour continuer avec Google.';
+function connectPage(authUrl: string): string {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${OG_TITLE}</title>
-<meta property="og:title" content="${escapeHtml(OG_TITLE)}">
-<meta property="og:description" content="${escapeHtml(OG_DESC)}">
-<meta property="og:site_name" content="Milo">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${escapeHtml(selfUrl)}">
-<meta name="twitter:card" content="summary">
-<meta name="theme-color" content="#0b0b0c">
+<title>Connecter Gmail + Agenda à Milo</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#0b0b0c;color:#eaeaea;display:grid;place-items:center;height:100vh;margin:0}.card{max-width:420px;padding:32px;text-align:center;line-height:1.5}h1{font-size:22px;margin:0 0 8px}p{color:#b3b3b3;margin:0 0 24px}.btn{display:inline-block;background:#fff;color:#111;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:12px}</style>
 <script>window.location.replace(${JSON.stringify(authUrl)})</script>
 </head><body><div class="card"><h1>Connecter à Milo</h1><p>Gmail + Agenda via Google</p><a class="btn" href="${escapeHtml(authUrl)}">Continuer avec Google →</a></div></body></html>`;
